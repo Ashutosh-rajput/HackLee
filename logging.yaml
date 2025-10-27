@@ -1,0 +1,32 @@
+version: 1
+
+formatters:
+  default:
+    format: "%(levelname)s %(asctime)s %(message)s"
+    datefmt: "%Y-%m-%d %H:%M:%S"
+
+handlers:
+  file:
+    class: logging.FileHandler
+    formatter: default
+    filename: server.log
+    mode: a
+  console:
+    class: logging.StreamHandler
+    formatter: default
+    stream: ext://sys.stdout
+
+loggers:
+  uvicorn:
+    handlers: [file, console]
+    level: INFO
+  uvicorn.error:
+    handlers: [file, console]
+    level: INFO
+  uvicorn.access:
+    handlers: [file, console]
+    level: INFO
+
+root:
+  handlers: [file, console]
+  level: INFO
