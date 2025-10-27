@@ -4,10 +4,12 @@ from datetime import datetime
 from typing import Optional
 
 # Autogen imports
-from autogen_agentchat.agents import AssistantAgent
+from autogen_agentchat.agents import AssistantAgent, UserProxyAgent
 from autogen_agentchat.base import TaskResult
-from autogen_agentchat.conditions import TextMentionTermination
+from autogen_agentchat.conditions import TextMentionTermination, MaxMessageTermination
+from autogen_agentchat.messages import TextMessage
 from autogen_agentchat.teams import RoundRobinGroupChat
+from autogen_core import CancellationToken
 from autogen_ext.models.openai import OpenAIChatCompletionClient, AzureOpenAIChatCompletionClient
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
@@ -200,30 +202,44 @@ async def chat_websocket(websocket: WebSocket):
         )
         logging.info("Session-specific Agents created.")
 
-        # # NOTE: you can skip input by pressing Enter.
-        # user_proxy = UserProxyAgent("user_proxy")
-        #
-        # # Maximum 1 round of review and revision.
+        # This helper function for user input remains the same
+        async def _user_input(prompt: str, cancellation_token: CancellationToken | None) -> str:
+            try:
+                await websocket.send_json({"type": "UserInputRequestedEvent", "prompt": prompt})
+                data = await websocket.receive_json()
+                message = TextMessage.model_validate(data)
+                return message.content
+            except WebSocketDisconnect:
+                logging.info("Client disconnected while waiting for user input.")
+                raise
+
+        user_proxy = UserProxyAgent(name="user_proxy", input_func=_user_input)
+
+
+        # NOTE: you can skip input by pressing Enter.
+        # user_proxy = (UserProxyAgent("user_proxy"))
+
+        # Maximum 1 round of review and revision.
         # inner_termination = MaxMessageTermination(max_messages=4)
-        #
-        # # The outter-loop termination condition that will terminate the team when the user types "exit".
-        # outter_termination = TextMentionTermination("exit", sources=["user_proxy"])
-        #
-        # team = RoundRobinGroupChat(
-        #     [
-        #         # For each turn, the writer writes a summary and the reviewer reviews it.
-        #         RoundRobinGroupChat([writer, reviewer], termination_condition=inner_termination),
-        #         # The user proxy gets user input once the writer and reviewer have finished their actions.
-        #         user_proxy,
-        #     ],
-        #     termination_condition=outter_termination,
-        # )
+
+        # The outter-loop termination condition that will terminate the team when the user types "exit".
+        outter_termination = TextMentionTermination("exit", sources=["user_proxy"])
+
+        team = RoundRobinGroupChat(
+            [
+                # For each turn, the writer writes a summary and the reviewer reviews it.
+                RoundRobinGroupChat([coding_agent, critic_agent], termination_condition=TextMentionTermination("Approved")),
+                # The user proxy gets user input once the writer and reviewer have finished their actions.
+                user_proxy,
+            ],
+            termination_condition=outter_termination,
+        )
 
         # 3. Set up the Agent Team (without a User Proxy)
-        team = RoundRobinGroupChat(
-            [coding_agent, critic_agent],
-            termination_condition=TextMentionTermination("Approved"),
-        )
+        # team = RoundRobinGroupChat(
+        #     [coding_agent, critic_agent],
+        #     termination_condition=TextMentionTermination("Approved"),
+        # )
         await team.reset()
 
         # 4. Define and Run the Initial Task
